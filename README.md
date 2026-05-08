@@ -1,97 +1,114 @@
-This is a new [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
+# Listings Feed
 
-# Getting Started
+A single-screen React Native + Firestore listing feed.
 
-> **Note**: Make sure you have completed the [Set Up Your Environment](https://reactnative.dev/docs/set-up-your-environment) guide before proceeding.
+---
 
-## Step 1: Start Metro
+## Features
 
-First, you will need to run **Metro**, the JavaScript build tool for React Native.
+| Requirement | Implementation |
+|---|---|
+| Cards: title, category, area, posted date | `ListingCard` — memo-wrapped, color-coded category pills |
+| Filter by category AND area simultaneously | Two `FilterBar` rows, combined into one Firestore query |
+| Sort by newest first | `orderBy('postedAtMs', 'desc')` on every query |
+| Result count without fetching documents | Firestore `count()` aggregation — 1 server read, 0 documents transferred |
+| Load 6 at a time + Load More | `limit(6)` + `startAfter(cursor)` cursor-based pagination |
+| Filter change resets list | `useEffect` on `filter` clears state and cursor before fetching |
+| Loading state | Full-screen spinner on first load, inline spinner on Load More |
+| Empty results | Empty state with message and icon |
 
-To start the Metro dev server, run the following command from the root of your React Native project:
+---
 
-```sh
-# Using npm
-npm start
+## Firestore Structure
 
-# OR using Yarn
-yarn start
+**Collection:** `listings`
+
+Each document:
+
+```
+title:      string       — "Used MacBook Pro 14""
+category:   string       — "Electronics"
+area:       string       — "Downtown"
+postedAt:   Timestamp    — Firestore Timestamp (used for display)
+postedAtMs: number       — Unix timestamp in ms (used for orderBy)
 ```
 
-## Step 2: Build and run your app
+**Why two date fields?**
 
-With Metro running, open a new terminal window/pane from the root of your React Native project, and use one of the following commands to build and run your Android or iOS app:
+Firestore requires a composite index whenever you combine `where()` on one field with `orderBy()` on a different field. Composite indexes must be manually created in the Firebase Console and take time to build. To avoid this dependency entirely, `postedAtMs` is stored as a plain number. Firestore auto-creates single-field indexes for all fields, so `orderBy('postedAtMs', 'desc')` works immediately with any combination of `where()` filters — no manual index creation required.
 
-### Android
+`postedAt` (Timestamp) is still stored for display purposes only, formatted in the card UI.
 
-```sh
-# Using npm
-npm run android
+---
 
-# OR using Yarn
-yarn android
+## Why `getDocs` (not `onSnapshot`)
+
+`getDocs` was chosen for three reasons:
+
+**1. Pagination compatibility.**
+`onSnapshot` with cursor-based pagination opens a persistent listener per page. Merging multiple real-time streams into a single ordered list requires complex state management and teardown logic. `getDocs` gives a clean, predictable result per call.
+
+**2. Cost efficiency.**
+A persistent `onSnapshot` listener bills a read every time any matching document changes. On a large collection with active writes, this compounds quickly. `getDocs` bills exactly one read per fetch — once for the page, once for the count.
+
+**3. This is a feed, not a collaborative document.**
+Listings data does not need sub-second real-time updates. Users pull down to refresh or tap Load More — both of which trigger `getDocs` on demand. `onSnapshot` would add complexity with no user-visible benefit here.
+
+---
+
+## How the Count Works Without Over-Fetching
+
+```ts
+const snapshot = await buildQuery(filter).count().get();
+return snapshot.data().count;
 ```
 
-### iOS
+`query.count()` is a Firestore server-side aggregation query. The server counts all matching documents and returns a single integer — no document data is transferred to the client. It costs 1 aggregation read regardless of how many documents match.
 
-For iOS, remember to install CocoaPods dependencies (this only needs to be run on first clone or after updating native deps).
+The count query uses the exact same `where()` constraints as the data query, so the number is always accurate for the current filter combination.
 
-The first time you create a new project, run the Ruby bundler to install CocoaPods itself:
+The first page fetch and the count are fired in parallel via `Promise.all`, so there is no waterfall delay.
 
-```sh
-bundle install
+---
+
+## Seeding Data
+
+The app includes a green **"Seed DB"** button in the header. Tap it once to write 40 sample listings directly from the app using the client SDK. The button disappears after seeding completes.
+
+Before seeding, set Firestore rules to allow writes temporarily:
+
+```js
+match /{document=**} {
+  allow read, write: if true;
+}
 ```
 
-Then, and every time you update your native dependencies, run:
+After seeding, lock writes back down:
 
-```sh
-bundle exec pod install
+```js
+match /listings/{listing} {
+  allow read: if true;
+  allow write: if false;
+}
 ```
 
-For more information, please visit [CocoaPods Getting Started guide](https://guides.cocoapods.org/using/getting-started.html).
+---
 
-```sh
-# Using npm
-npm run ios
+## Project Structure
 
-# OR using Yarn
-yarn ios
 ```
-
-If everything is set up correctly, you should see your new app running in the Android Emulator, iOS Simulator, or your connected device.
-
-This is one way to run your app — you can also build it directly from Android Studio or Xcode.
-
-## Step 3: Modify your app
-
-Now that you have successfully run the app, let's make changes!
-
-Open `App.tsx` in your text editor of choice and make some changes. When you save, your app will automatically update and reflect these changes — this is powered by [Fast Refresh](https://reactnative.dev/docs/fast-refresh).
-
-When you want to forcefully reload, for example to reset the state of your app, you can perform a full reload:
-
-- **Android**: Press the <kbd>R</kbd> key twice or select **"Reload"** from the **Dev Menu**, accessed via <kbd>Ctrl</kbd> + <kbd>M</kbd> (Windows/Linux) or <kbd>Cmd ⌘</kbd> + <kbd>M</kbd> (macOS).
-- **iOS**: Press <kbd>R</kbd> in iOS Simulator.
-
-## Congratulations! :tada:
-
-You've successfully run and modified your React Native App. :partying_face:
-
-### Now what?
-
-- If you want to add this new React Native code to an existing application, check out the [Integration guide](https://reactnative.dev/docs/integration-with-existing-apps).
-- If you're curious to learn more about React Native, check out the [docs](https://reactnative.dev/docs/getting-started).
-
-# Troubleshooting
-
-If you're having issues getting the above steps to work, see the [Troubleshooting](https://reactnative.dev/docs/troubleshooting) page.
-
-# Learn More
-
-To learn more about React Native, take a look at the following resources:
-
-- [React Native Website](https://reactnative.dev) - learn more about React Native.
-- [Getting Started](https://reactnative.dev/docs/environment-setup) - an **overview** of React Native and how setup your environment.
-- [Learn the Basics](https://reactnative.dev/docs/getting-started) - a **guided tour** of the React Native **basics**.
-- [Blog](https://reactnative.dev/blog) - read the latest official React Native **Blog** posts.
-- [`@facebook/react-native`](https://github.com/facebook/react-native) - the Open Source; GitHub **repository** for React Native.
+src/
+├── components/
+│   ├── FilterBar.tsx           Horizontal chip selector
+│   └── ListingCard.tsx         Card UI, memo-wrapped
+├── screens/
+│   └── ListingsScreen.tsx      Single screen — all state and logic
+├── services/
+│   └── firestore.service.ts    All Firestore queries
+├── types/
+│   └── listing.types.ts        Shared types and constants
+├── utils/
+│   └── seedData.ts             Client-side seed utility
+└── theme/
+    └── theme.config.ts         Design tokens
+```

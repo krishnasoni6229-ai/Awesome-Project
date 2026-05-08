@@ -1,38 +1,51 @@
 # Resolve react_native_pods.rb with node to allow for hoisting
-
 require Pod::Executable.execute_command('node', ['-p',
   'require.resolve(
     "react-native/scripts/react_native_pods.rb",
     {paths: [process.argv[1]]},
   )', __dir__]).strip
 
-platform :ios, min_ios_version_supported
+platform :ios, '15.1'
 prepare_react_native_project!
 
-linkage = ENV['USE_FRAMEWORKS']
-if linkage != nil
-  Pod::UI.puts "Configuring Pod with #{linkage}ally linked Frameworks".green
-  use_frameworks! :linkage => linkage.to_sym
-end
+# 1. Global setting for Firebase
+$RNFirebaseAsStaticFramework = true
 
 target 'AwesomeProject' do
+  # 2. Fix for "Swift pods cannot yet be integrated as static libraries"
+  pod 'GoogleUtilities', :modular_headers => true
+  pod 'FirebaseCoreInternal', :modular_headers => true
+  pod 'FirebaseFirestoreInternal', :modular_headers => true
+  
   config = use_native_modules!
 
   use_react_native!(
     :path => config[:reactNativePath],
-    # An absolute path to your application root.
     :app_path => "#{Pod::Config.instance.installation_root}/.."
   )
 
-  rn_maps_path = '../node_modules/react-native-maps'
-  pod 'react-native-maps/Google', :path => rn_maps_path
-  
   post_install do |installer|
     react_native_post_install(
       installer,
       config[:reactNativePath],
-      :mac_catalyst_enabled => false,
-      # :ccache_enabled => true
+      :mac_catalyst_enabled => false
     )
+
+    # 3. Comprehensive Fix for Xcode 16.3+ / SDK 18.4
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |config|
+        # Fix for non-modular include errors
+        config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+        
+        # Suppress the "Quoted include" warnings that clutter Xcode 16 logs
+        config.build_settings['CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER'] = 'NO'
+
+        # 4. Specific Fix for RNFBFirestore incompatible-pointer-types
+        if target.name.include? 'RNFBFirestore'
+          config.build_settings['WARNING_CFLAGS'] ||= []
+          config.build_settings['WARNING_CFLAGS'] << '-Wno-incompatible-pointer-types'
+        end
+      end
+    end
   end
 end
